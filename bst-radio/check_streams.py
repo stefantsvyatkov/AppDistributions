@@ -124,6 +124,52 @@ class HostLimit:
             return self._semaphores[host]
 
 
+REVIEW_LIMIT = 60000  # GitHub takes an issue of up to 65536 characters
+
+
+def write_review(path, dead, was_dead, today):
+    """
+    The issue the user is told about by e-mail (the user's wish, 2026-09-29: a reminder when there are stations to
+    look at). Written only when some stream reached five days today; the workflow opens it when no review issue is
+    open, and otherwise only brings the open one up to date, which sends no e-mail. In Bulgarian, for the user.
+    """
+    new = [item for item in dead if item[2] not in was_dead]
+    if not new:
+        return
+    full = "https://github.com/stefantsvyatkov/AppDistributions/releases/download/bst-radio-health/dead-streams.txt"
+    lines = [
+        f"BST Radio: {len(dead)} потока не са свирили {DEAD_DAYS} поредни дни, от тях {len(new)} нови ({today})",
+        "",
+        f"Проверката пуска всеки поток от Radio Browser всяка нощ. Тези не са дали звук {DEAD_DAYS} поредни дни. "
+        "Каталогът на BST Radio ги изпуска (първата седмица само ги брои). Поток, който засвири отново, се връща сам.",
+        "",
+        f"Затвори тази тема, когато я прегледаш: следващите нови ще отворят нова и ще получиш имейл. "
+        f"Пълният списък: {full}",
+        "",
+        "## Нови",
+        "",
+    ]
+
+    def entry(item):
+        country, name, address, record = item
+        return f"- {country} · {name or '(без име)'} · {address} · от {record['since']} · {record['why']}"
+
+    lines += [entry(item) for item in new]
+    rest = [item for item in dead if item[2] in was_dead]
+    if rest:
+        lines += ["", f"## От преди ({len(rest)})", ""] + [entry(item) for item in rest]
+
+    text, used = [], 0
+    for line in lines:
+        if used + len(line) + 1 > REVIEW_LIMIT:
+            text.append(f"\n… още редове има в пълния списък: {full}")
+            break
+        text.append(line)
+        used += len(line) + 1
+    with open(path, "w", encoding="utf-8") as file:
+        file.write("\n".join(text) + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--previous")
@@ -132,6 +178,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=64)
     parser.add_argument("--per-host", type=int, default=16)
     parser.add_argument("--limit", type=int, default=0, help="check only so many addresses (a trial)")
+    parser.add_argument("--review", help="write the text of a review issue here when new streams reach five days")
     options = parser.parse_args()
 
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -201,6 +248,10 @@ def main():
         for country, name, address, record in dead:
             file.write(f"{country}\t{name}\t{address}\t{record['days']} days since {record['since']}\t{record['why']}\n")
 
+    if options.review:
+        was_dead = {address for address, record in previous.items() if record.get("days", 0) >= DEAD_DAYS}
+        write_review(options.review, dead, was_dead, today)
+
     counts = {"ok": 0, "blocked": 0, "failed": 0}
     for state, _ in results.values():
         counts[state] += 1
@@ -210,4 +261,5 @@ def main():
           f"{len(dead)} have failed on {DEAD_DAYS} days or more.")
 
 
-main()
+if __name__ == "__main__":
+    main()

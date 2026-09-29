@@ -17,6 +17,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: bst-radio-stream-check
@@ -41,7 +42,7 @@ jobs:
             || echo "::notice::No earlier record; a new one is started."
 
       - name: Play every stream
-        run: python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --out stream-health.json.gz --report dead-streams.txt >> "$GITHUB_STEP_SUMMARY"
+        run: python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --out stream-health.json.gz --report dead-streams.txt --review review.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish the record
         run: |
@@ -49,3 +50,21 @@ jobs:
             || gh release create "$TAG" --repo "$REPO" --title "BST Radio stream health" \
                  --notes "Which of Radio Browser's streams play, checked every night by bst-radio/check_streams.py."
           gh release upload "$TAG" stream-health.json.gz dead-streams.txt --repo "$REPO" --clobber
+
+      # The user's reminder (2026-09-29): when streams newly reach five days, an issue assigned to the owner, which
+      # GitHub e-mails. While one is open it is only brought up to date (no e-mail); closing it after the review
+      # lets the next new ones open another.
+      - name: Tell the owner when new streams reach five days
+        if: hashFiles('review.md') != ''
+        run: |
+          gh label create bst-radio-review --repo "$REPO" --color d93f0b \
+            --description "BST Radio stations to look at" --force > /dev/null
+          title=$(head -n 1 review.md)
+          tail -n +3 review.md > body.md
+          open=$(gh issue list --repo "$REPO" --label bst-radio-review --state open --json number --jq '.[0].number // empty')
+          if [ -z "$open" ]; then
+            gh issue create --repo "$REPO" --title "$title" --body-file body.md --label bst-radio-review \
+              --assignee "${{ github.repository_owner }}"
+          else
+            gh issue edit "$open" --repo "$REPO" --title "$title" --body-file body.md
+          fi
