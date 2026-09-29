@@ -195,6 +195,9 @@ def main():
     dead = sorted((stations[address][0], stations[address][1], address, record)
                   for address, record in streams.items() if record.get("days", 0) >= DEAD_DAYS)
     with open(options.report, "w", encoding="utf-8") as file:
+        # Never empty: GitHub refuses to upload an empty file.
+        file.write(f"# Streams that have not played on {DEAD_DAYS} days in a row, checked {today}: {len(dead)}.\n")
+        file.write("# Country, station, address, days, last reason.\n")
         for country, name, address, record in dead:
             file.write(f"{country}\t{name}\t{address}\t{record['days']} days since {record['since']}\t{record['why']}\n")
 
