@@ -1,32 +1,45 @@
 """Once a day: does every stream of Radio Browser play?
 
-BST Radio's catalogue (built in a private repository) leaves out a stream that has not played on five days in a
-row. This script finds out: it downloads Radio Browser's list of stations, plays every stream address for one
-second with ffmpeg (as a player would, so HLS, playlists, redirects and old Shoutcast servers all count) and keeps
-a record of the days each stream failed. Only the stream addresses are used, which Radio Browser publishes anyway.
+BST Radio's catalogue (built in a private repository) leaves out, by itself, a stream that has not played on seven
+nights in a row (the owner's decision, 2026-10-02, with the wish that no stream that plays is ever left out). This
+script finds out: it downloads Radio Browser's list of stations, plays every stream address for one second with
+ffmpeg (as a player would, so HLS, playlists, redirects and old Shoutcast servers all count) and keeps a record of
+the days each stream failed. Only the stream addresses are used, which Radio Browser publishes anyway.
 
 A stream is
-  ok       when ffmpeg decoded a second of its sound;
-  blocked  when its server answered 403 or 451: usually a station that plays only in its own country (this
-           check runs in a data centre abroad), so it is never counted as failing;
-  failed   otherwise (no answer, 404, a web page instead of sound, nothing decodable...).
+  ok       when ffmpeg decoded a second of its sound, or opened the stream and only its null output took none
+           of it (HLS of some broadcasters), or, after ffmpeg waited 30 s in vain, curl got 16 KB of it that is not
+           a web page (old Shoutcast servers keep this ffmpeg waiting);
+  blocked  when its server refused (401, 403, or another 4xx but 400 and 404): usually a station that plays
+           only in its own country or not to data centres (this check runs in one abroad), so it never fails;
+  failed   otherwise (no answer, 404, 5xx, a web page instead of sound, nothing decodable...), twice: every
+           failure is played once more at the end of the run, with a browser's name and at most two streams of
+           a server at a time, because big hosts (zeno.fm, sharp-stream) stop answering when asked too often.
+A night on which more than 6% of the streams fail is the check's own trouble (its network, a broken ffmpeg),
+not the stations': its failures are not counted.
+
+On 2026-10-01 a sample of the streams that had failed three nights was played again from Bulgaria: of the ones
+this check now counts as failing, nine in ten did not play there either; the rest were refused to data centres,
+which the second try and the seven nights are for.
 
 stream-health.json.gz holds, per address: the last day it played ("ok"), and while it keeps failing the first
 day of the run of failures ("since"), how many days of it ("days") and the last reason ("why"). A success ends
-the run. dead-streams.txt lists the addresses at five days or more, by country, for a person to look at. Both
-are published in this repository's "bst-radio-health" release (.github/workflows/bst-radio-stream-check.yml).
+the run. dead-streams.txt lists the addresses at seven days or more, by country. Both are published in this
+repository's "bst-radio-health" release (.github/workflows/bst-radio-stream-check.yml).
 
     python3 check_streams.py [--previous stream-health.json.gz] [--out stream-health.json.gz]
-                             [--report dead-streams.txt] [--jobs 64] [--per-host 16] [--limit N]
+                             [--report dead-streams.txt] [--jobs 64] [--per-host 8] [--limit N]
 """
 
 import argparse
 import datetime
 import gzip
 import json
+import os
 import random
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -34,8 +47,11 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 USER_AGENT = "BSTRadio-StreamCheck/1.0 (+https://github.com/stefantsvyatkov/AppDistributions)"
+PLAYER_AGENT = "VLC/3.0.20 LibVLC/3.0.20"
+BROWSER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 SERVERS = ["de1", "de2", "nl1", "at1", "fi1", "fr1"]
-DEAD_DAYS = 5
+DEAD_DAYS = 7
+BAD_NIGHT = 0.06
 
 
 def fetch(url, timeout):
@@ -86,7 +102,31 @@ def first_in_pls(address):
     return None
 
 
-def play(address):
+def sends_sound(address, agent):
+    """
+    A second, plain look at a stream ffmpeg waited for in vain: curl (which also takes the "ICY 200 OK" of old
+    Shoutcast servers) reads it for up to 15 s, and 16 KB or more of something that is not a web page is sound.
+    """
+    with tempfile.TemporaryDirectory() as folder:
+        body, head = os.path.join(folder, "body"), os.path.join(folder, "head")
+        try:
+            subprocess.run(["curl", "-sS", "-L", "--max-time", "15", "-A", agent, "-o", body, "-D", head, address],
+                           capture_output=True, timeout=25)
+        except subprocess.TimeoutExpired:
+            return False
+        if not os.path.exists(body) or os.path.getsize(body) < 16384:
+            return False
+        with open(head, encoding="latin-1") as file:
+            last = [block for block in file.read().split("\r\n\r\n") if block.strip()][-1:] or [""]
+        return "content-type: text/html" not in last[0].lower()
+
+
+# ffmpeg's words for a server that refused: 401, 403, or any other 4xx but 400 and 404 ("4XX Client Error, but not
+# one of 40{0,1,3,4}": 405, 407, 429, 451...).
+REFUSED = ("Server returned 401", "Server returned 403", "Server returned 4XX", "403 Forbidden", "451 Unavailable")
+
+
+def play(address, agent=PLAYER_AGENT):
     """ok, blocked or failed, and why."""
     target = address
     try:
@@ -95,17 +135,18 @@ def play(address):
     except Exception as error:
         return "failed", f"playlist: {error}"[:120]
     command = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "10000000",
-               "-user_agent", "VLC/3.0.20 LibVLC/3.0.20", "-i", target, "-t", "1", "-vn", "-f", "null", "-"]
+               "-user_agent", agent, "-i", target, "-t", "1", "-vn", "-f", "null", "-"]
     try:
         result = subprocess.run(command, capture_output=True, timeout=30)
     except subprocess.TimeoutExpired:
-        return "failed", "no sound within 30 s"
+        return ("ok", "") if sends_sound(target, agent) else ("failed", "no sound within 30 s")
     if result.returncode == 0:
         return "ok", ""
     lines = [line for line in result.stderr.decode("utf-8", "replace").splitlines() if line.strip()]
     why = (lines[-1] if lines else f"ffmpeg exit code {result.returncode}").strip()
-    if any(code in why for code in ("403 Forbidden", "451 ", "Server returned 403", "Server returned 451")) or \
-            any("403 Forbidden" in line or "451 Unavailable" in line for line in lines):
+    if "Error opening output files" in why:
+        return "ok", ""  # the input opened: the server sends a stream, only the null output took none of it
+    if any(word in line for line in lines for word in REFUSED):
         return "blocked", why[:120]
     return "failed", why[:120]
 
@@ -124,61 +165,14 @@ class HostLimit:
             return self._semaphores[host]
 
 
-REVIEW_LIMIT = 60000  # GitHub takes an issue of up to 65536 characters
-
-
-def write_review(path, dead, was_dead, today):
-    """
-    The issue the user is told about by e-mail (the user's wish, 2026-09-29: a reminder when there are stations to
-    look at). Written only when some stream reached five days today; the workflow opens it when no review issue is
-    open, and otherwise only brings the open one up to date, which sends no e-mail. In Bulgarian, for the user.
-    """
-    new = [item for item in dead if item[2] not in was_dead]
-    if not new:
-        return
-    full = "https://github.com/stefantsvyatkov/AppDistributions/releases/download/bst-radio-health/dead-streams.txt"
-    lines = [
-        f"BST Radio: {len(dead)} потока не са свирили {DEAD_DAYS} поредни дни, от тях {len(new)} нови ({today})",
-        "",
-        f"Проверката пуска всеки поток от Radio Browser всяка нощ. Тези не са дали звук {DEAD_DAYS} поредни дни. "
-        "Каталогът на BST Radio ги изпуска (първата седмица само ги брои). Поток, който засвири отново, се връща сам.",
-        "",
-        f"Затвори тази тема, когато я прегледаш: следващите нови ще отворят нова и ще получиш имейл. "
-        f"Пълният списък: {full}",
-        "",
-        "## Нови",
-        "",
-    ]
-
-    def entry(item):
-        country, name, address, record = item
-        return f"- {country} · {name or '(без име)'} · {address} · от {record['since']} · {record['why']}"
-
-    lines += [entry(item) for item in new]
-    rest = [item for item in dead if item[2] in was_dead]
-    if rest:
-        lines += ["", f"## От преди ({len(rest)})", ""] + [entry(item) for item in rest]
-
-    text, used = [], 0
-    for line in lines:
-        if used + len(line) + 1 > REVIEW_LIMIT:
-            text.append(f"\n… още редове има в пълния списък: {full}")
-            break
-        text.append(line)
-        used += len(line) + 1
-    with open(path, "w", encoding="utf-8") as file:
-        file.write("\n".join(text) + "\n")
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--previous")
     parser.add_argument("--out", default="stream-health.json.gz")
     parser.add_argument("--report", default="dead-streams.txt")
     parser.add_argument("--jobs", type=int, default=64)
-    parser.add_argument("--per-host", type=int, default=16)
+    parser.add_argument("--per-host", type=int, default=8)
     parser.add_argument("--limit", type=int, default=0, help="check only so many addresses (a trial)")
-    parser.add_argument("--review", help="write the text of a review issue here when new streams reach five days")
     options = parser.parse_args()
 
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -215,10 +209,29 @@ def main():
             if done % 2000 == 0:
                 print(f"{done} of {len(addresses)} in {time.time() - began:.0f} s", file=sys.stderr, flush=True)
 
+    # Every failure once more, as a browser and gently: a stream fails the night only when both tries fail.
+    retry, rescued = [address for address, (state, _) in results.items() if state == "failed"], 0
+    gentle = HostLimit(2)
+
+    def again(address):
+        with gentle.of(address):
+            return address, play(address, BROWSER_AGENT)
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        for address, outcome in pool.map(again, retry):
+            if outcome[0] != "failed":
+                results[address], rescued = outcome, rescued + 1
+
+    failed_tonight = sum(1 for state, _ in results.values() if state == "failed")
+    bad_night = len(addresses) >= 1000 and failed_tonight > len(addresses) * BAD_NIGHT
+
     streams = {}
     for address in addresses:
         state, why = results[address]
         record = dict(previous.get(address, {}))
+        if state == "failed" and bad_night:
+            streams[address] = record  # the check's own trouble: the night does not count
+            continue
         if state == "ok" or state == "blocked":
             record.pop("since", None), record.pop("days", None), record.pop("why", None)
             if state == "ok":
@@ -248,17 +261,15 @@ def main():
         for country, name, address, record in dead:
             file.write(f"{country}\t{name}\t{address}\t{record['days']} days since {record['since']}\t{record['why']}\n")
 
-    if options.review:
-        was_dead = {address for address, record in previous.items() if record.get("days", 0) >= DEAD_DAYS}
-        write_review(options.review, dead, was_dead, today)
-
     counts = {"ok": 0, "blocked": 0, "failed": 0}
     for state, _ in results.values():
         counts[state] += 1
     print(f"## Stream check {today}\n")
     print(f"{len(addresses)} stream addresses in {(time.time() - began) / 60:.0f} minutes: {counts['ok']} play, "
-          f"{counts['blocked']} blocked abroad, {counts['failed']} failed today; "
-          f"{len(dead)} have failed on {DEAD_DAYS} days or more.")
+          f"{counts['blocked']} refused abroad, {counts['failed']} failed twice tonight ({rescued} more played at "
+          f"the second try); {len(dead)} have failed on {DEAD_DAYS} days or more.")
+    if bad_night:
+        print(f"\nMore than {BAD_NIGHT:.0%} failed: the check's own trouble, so tonight's failures are not counted.")
 
 
 if __name__ == "__main__":
