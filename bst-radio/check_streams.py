@@ -173,6 +173,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=64)
     parser.add_argument("--per-host", type=int, default=8)
     parser.add_argument("--limit", type=int, default=0, help="check only so many addresses (a trial)")
+    parser.add_argument("--extra-streams", help="BST Radio's own stations' addresses, one a line (extra-streams.txt)")
     options = parser.parse_args()
 
     today = datetime.datetime.now(datetime.timezone.utc).date().isoformat()
@@ -191,6 +192,16 @@ def main():
         address = (entry.get("url_resolved") or entry.get("url") or "").strip()
         if address.lower().startswith(("http://", "https://")) and address not in stations:
             stations[address] = (entry.get("countrycode") or "--", (entry.get("name") or "").strip())
+    # BST Radio's own stations that Radio Browser lacks (published by the catalogue build): played the same way.
+    if options.extra_streams:
+        try:
+            with open(options.extra_streams, encoding="utf-8") as file:
+                for line in file:
+                    address = line.strip()
+                    if address.lower().startswith(("http://", "https://")) and address not in stations:
+                        stations[address] = ("--", "(BST Radio)")
+        except FileNotFoundError:
+            print("No list of BST Radio's own stations.", file=sys.stderr)
     addresses = list(stations)
     random.shuffle(addresses)  # the hosting services' streams spread over the whole run
     if options.limit:

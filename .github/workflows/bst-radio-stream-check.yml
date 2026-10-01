@@ -41,8 +41,13 @@ jobs:
           gh release download "$TAG" --repo "$REPO" --pattern stream-health.json.gz --dir previous \
             || echo "::notice::No earlier record; a new one is started."
 
+      # BST Radio's own stations that Radio Browser lacks, which the catalogue build lists in its release.
+      - name: Fetch BST Radio's own stations
+        run: |
+          gh release download bst-radio-catalog --repo "$REPO" --pattern extra-streams.txt --dir previous             || echo "::notice::No list of BST Radio's own stations yet."
+
       - name: Play every stream
-        run: python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --out stream-health.json.gz --report dead-streams.txt >> "$GITHUB_STEP_SUMMARY"
+        run: python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --extra-streams previous/extra-streams.txt --out stream-health.json.gz --report dead-streams.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish the record
         run: |
