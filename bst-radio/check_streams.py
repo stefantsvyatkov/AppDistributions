@@ -247,9 +247,9 @@ def main():
             record.pop("since", None), record.pop("days", None), record.pop("why", None)
             if state == "ok":
                 record["ok"] = today
-                record.pop("blocked", None)
+                record.pop("blocked", None), record.pop("refused", None)
             else:
-                record["blocked"] = today
+                record["blocked"], record["refused"] = today, why  # what the server said, to see who refuses and how
         else:
             if "since" not in record:
                 record["since"], record["days"] = today, 1
