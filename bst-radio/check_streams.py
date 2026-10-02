@@ -1,4 +1,4 @@
-"""Once a day: does every stream of Radio Browser play?
+"""Twice a day, twelve hours apart: does every stream of Radio Browser play?
 
 BST Radio's catalogue (built in a private repository) leaves out, by itself, a stream that has not played on seven
 nights in a row (the owner's decision, 2026-10-02, with the wish that no stream that plays is ever left out). This
@@ -15,7 +15,8 @@ A stream is
   failed   otherwise (no answer, 404, 5xx, a web page instead of sound, nothing decodable...), twice: every
            failure is played once more at the end of the run, with a browser's name and at most two streams of
            a server at a time, because big hosts (zeno.fm, sharp-stream) stop answering when asked too often.
-A night on which more than 6% of the streams fail is the check's own trouble (its network, a broken ffmpeg),
+A day counts as failed only when every run of it failed (a stream that plays at either time is fine that day). A
+night on which more than 6% of the streams fail is the check's own trouble (its network, a broken ffmpeg),
 not the stations': its failures are not counted.
 
 On 2026-10-01 a sample of the streams that had failed three nights was played again from Bulgaria: of the ones
