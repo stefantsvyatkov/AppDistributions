@@ -53,6 +53,9 @@ BROWSER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (K
 SERVERS = ["de1", "de2", "nl1", "at1", "fi1", "fr1"]
 DEAD_DAYS = 7
 BAD_NIGHT = 0.06
+# On Windows (confirm_dead.py on the owner's computer) ffmpeg and curl must open no console window: one would take
+# the screen reader's focus.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def fetch(url, timeout):
@@ -112,7 +115,7 @@ def sends_sound(address, agent):
         body, head = os.path.join(folder, "body"), os.path.join(folder, "head")
         try:
             subprocess.run(["curl", "-sS", "-L", "--max-time", "15", "-A", agent, "-o", body, "-D", head, address],
-                           capture_output=True, timeout=25)
+                           capture_output=True, timeout=25, creationflags=NO_WINDOW)
         except subprocess.TimeoutExpired:
             return False
         if not os.path.exists(body) or os.path.getsize(body) < 16384:
@@ -138,7 +141,7 @@ def play(address, agent=PLAYER_AGENT):
     command = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "10000000",
                "-user_agent", agent, "-i", target, "-t", "1", "-vn", "-f", "null", "-"]
     try:
-        result = subprocess.run(command, capture_output=True, timeout=30)
+        result = subprocess.run(command, capture_output=True, timeout=30, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return ("ok", "") if sends_sound(target, agent) else ("failed", "no sound within 30 s")
     if result.returncode == 0:
