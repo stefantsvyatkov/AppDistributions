@@ -14,7 +14,12 @@ A stream is
            only in its own country or not to data centres (this check runs in one abroad), so it never fails;
   failed   otherwise (no answer, 404, 5xx, a web page instead of sound, nothing decodable...), twice: every
            failure is played once more at the end of the run, with a browser's name and at most two streams of
-           a server at a time, because big hosts (zeno.fm, sharp-stream) stop answering when asked too often.
+           a server at a time, because big hosts (zeno.fm, sharp-stream) stop answering when asked too often;
+           and also when its title is a notice instead of a song ("Newlinks - EN", "stream moved", "inactive":
+           the owner's decision of 2026-10-08, after BadRock's old addresses played only a spoken notice to take
+           the new links, which counted as playing). Its reason is "notice: " and the title, which the catalogue's
+           report shows. A song of such a name fails a run at most: a day fails only when both runs fail, and a
+           stream goes only after seven such days.
 A day counts as failed only when every run of it failed (a stream that plays at either time is fine that day). A
 night on which more than 6% of the streams fail is the check's own trouble (its network, a broken ffmpeg),
 not the stations': its failures are not counted.
@@ -38,6 +43,7 @@ import gzip
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -129,6 +135,17 @@ def sends_sound(address, agent):
 # one of 40{0,1,3,4}": 405, 407, 429, 451...).
 REFUSED = ("Server returned 401", "Server returned 403", "Server returned 4XX", "403 Forbidden", "451 Unavailable")
 
+# A title that is a notice, not a song: the stream plays, but only to say that it is gone ("Newlinks - EN" and
+# "Newlink - DE" of BadRock's old addresses, 2026-10-08), in English and Bulgarian.
+NOTICE = re.compile(
+    r"new ?links?\b|\bnew (address|url|stream|link)|\b(has|have|we|stream|station|radio) moved\b|\bmoved to\b"
+    r"|\binactive\b|\bnot active\b|\bno longer (on air|available|active|broadcasting)\b"
+    r"|^\s*(stream |station )?offline\s*$|\b(stream|station|radio) (is )?offline\b"
+    r"|нов(и|ия)? (адрес|линк|поток)|неактив", re.IGNORECASE)
+
+# ffmpeg's lines with their level ("-loglevel level+info"): "[in#0 @ 0x...] [error] Error opening input: ...".
+LEVELLED = re.compile(r"^(?:\[[^\]]*\] )?\[(\w+)\] ?(.*)$")
+
 
 def play(address, agent=PLAYER_AGENT):
     """ok, blocked or failed, and why."""
@@ -138,18 +155,22 @@ def play(address, agent=PLAYER_AGENT):
             target = first_in_pls(address) or address
     except Exception as error:
         return "failed", f"playlist: {error}"[:120]
-    command = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "error", "-rw_timeout", "10000000",
+    command = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "level+info", "-rw_timeout", "10000000",
                "-user_agent", agent, "-i", target, "-t", "1", "-vn", "-f", "null", "-"]
     try:
         result = subprocess.run(command, capture_output=True, timeout=30, creationflags=NO_WINDOW)
     except subprocess.TimeoutExpired:
         return ("ok", "") if sends_sound(target, agent) else ("failed", "no sound within 30 s")
-    if result.returncode == 0:
-        return "ok", ""
     lines = [line for line in result.stderr.decode("utf-8", "replace").splitlines() if line.strip()]
-    why = (lines[-1] if lines else f"ffmpeg exit code {result.returncode}").strip()
-    if "Error opening output files" in why:
-        return "ok", ""  # the input opened: the server sends a stream, only the null output took none of it
+    levelled = [match.groups() for match in map(LEVELLED.match, lines) if match]
+    titles = [text.split(":", 1)[1].strip() for _, text in levelled if text.strip().startswith("StreamTitle")]
+    errors = [text.strip() for level, text in levelled if level in ("error", "fatal")]
+    if result.returncode == 0 or any("Error opening output files" in text for text in errors[-1:]):
+        # It plays, or the input opened and only the null output took none of it - unless it only says it is gone.
+        if titles and NOTICE.search(titles[0]):
+            return "failed", f"notice: {titles[0]}"[:120]
+        return "ok", ""
+    why = (errors[-1] if errors else f"ffmpeg exit code {result.returncode}").strip()
     if any(word in line for line in lines for word in REFUSED):
         return "blocked", why[:120]
     return "failed", why[:120]
