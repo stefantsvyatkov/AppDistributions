@@ -1,10 +1,16 @@
 name: BST Radio stream check
 
 # Every night, before BST Radio's catalogue is made (04:17 UTC): bst-radio/check_streams.py plays every stream of
-# Radio Browser for a second and keeps the days each one failed. The record goes to the "bst-radio-health" release,
+# Radio Browser for a second and keeps the days each one failed. The record goes to the draft release "bst-radio-data",
 # where the catalogue build reads it and leaves out a stream that has not played on seven nights in a row (by itself,
 # the owner's decision of 2026-10-02; the owner's e-mail of what left the catalogue comes from that build). It runs
 # in this public repository because its Actions minutes are free; it needs no secret.
+
+# The working files of the catalogue build and of this check are in a draft release since 2026-10-19 (the owner's wish:
+# only what the apps need is public - the app releases and the catalogue's manifest and packages). A draft is seen only
+# by the repository's owner and its workflows (this one's token, the catalogue build's CATALOG_TOKEN, the confirmation
+# script's gh on the owner's computer); the GitHub CLI finds it by its tag name. Until then they were the public
+# "bst-radio-health" release and files beside the catalogue.
 
 # Twice a day, twelve hours apart (the owner's wish, 2026-10-02: when the most stations play): a station that is on
 # the air at either time is never counted as failing that day, so one that is silent at night where it is stays.
@@ -32,7 +38,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
-      TAG: bst-radio-health
+      TAG: bst-radio-data
     steps:
       - uses: actions/checkout@v4
 
@@ -44,17 +50,21 @@ jobs:
           gh release download "$TAG" --repo "$REPO" --pattern stream-health.json.gz --dir previous \
             || echo "::notice::No earlier record; a new one is started."
 
-      # BST Radio's own stations that Radio Browser lacks, which the catalogue build lists in its release.
+      # BST Radio's own stations that Radio Browser lacks, which the catalogue build puts in the same draft release.
       - name: Fetch BST Radio's own stations
         run: |
-          gh release download bst-radio-catalog --repo "$REPO" --pattern extra-streams.txt --dir previous             || echo "::notice::No list of BST Radio's own stations yet."
+          gh release download "$TAG" --repo "$REPO" --pattern extra-streams.txt --dir previous \
+            || echo "::notice::No list of BST Radio's own stations yet."
 
       - name: Play every stream
         run: python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --extra-streams previous/extra-streams.txt --out stream-health.json.gz --report dead-streams.txt >> "$GITHUB_STEP_SUMMARY"
 
+      # The draft is made again only when it is gone: a draft's tag name is not unique, and a second one would split the files.
       - name: Publish the record
         run: |
-          gh release view "$TAG" --repo "$REPO" > /dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$REPO" --title "BST Radio stream health" \
-                 --notes "Which of Radio Browser's streams play, checked every night by bst-radio/check_streams.py."
+          if ! output=$(gh release view "$TAG" --repo "$REPO" 2>&1); then
+            if [[ "$output" != *"not found"* ]]; then echo "::error::Reading $TAG failed: $output"; exit 1; fi
+            gh release create "$TAG" --repo "$REPO" --draft --title "BST Radio data (not public)" \
+              --notes "The working files of BST Radio's catalog build and nightly stream check. A draft: only the repository's owner and its workflows see it."
+          fi
           gh release upload "$TAG" stream-health.json.gz dead-streams.txt --repo "$REPO" --clobber

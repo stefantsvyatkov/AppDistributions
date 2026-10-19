@@ -7,7 +7,8 @@ streams that fail here too, on an ordinary connection (the owner's decision, 202
 
 This script downloads the check's record, plays every stream that has failed there on CANDIDATE_DAYS days or more,
 the same way the check does (ffmpeg, then curl; as a player and then as a browser), and publishes the ones that
-failed here too as confirmed-dead.txt in the "bst-radio-health" release, its first line saying when. Nothing opens a
+failed here too as confirmed-dead.txt in the draft release "bst-radio-data" (a draft: only the owner and the workflows
+see it; the public "bst-radio-health" release until 2026-10-19), its first line saying when. Nothing opens a
 window and nothing is heard. The catalogue build warns the owner by e-mail when the file grows old (this computer
 off, reinstalled, or the task gone); install_confirmation.ps1 sets the task up again.
 
@@ -32,7 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_streams as check  # noqa: E402
 
 REPOSITORY = "stefantsvyatkov/AppDistributions"
-TAG = "bst-radio-health"
+TAG = "bst-radio-data"
 # Two days before the catalogue's seven, so the confirmation is there when a stream reaches them.
 CANDIDATE_DAYS = check.DEAD_DAYS - 2
 LOG = os.path.join(tempfile.gettempdir(), "bst-radio-confirmation.log")

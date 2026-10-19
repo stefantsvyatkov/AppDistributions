@@ -30,8 +30,9 @@ which the second try and the seven nights are for.
 
 stream-health.json.gz holds, per address: the last day it played ("ok"), and while it keeps failing the first
 day of the run of failures ("since"), how many days of it ("days") and the last reason ("why"). A success ends
-the run. dead-streams.txt lists the addresses at seven days or more, by country. Both are published in this
-repository's "bst-radio-health" release (.github/workflows/bst-radio-stream-check.yml).
+the run. dead-streams.txt lists the addresses at seven days or more, by country. Both go to this repository's
+draft release "bst-radio-data", which only the owner and the workflows see (.github/workflows/bst-radio-stream-check.yml;
+the public "bst-radio-health" release until 2026-10-19).
 
     python3 check_streams.py [--previous stream-health.json.gz] [--out stream-health.json.gz]
                              [--report dead-streams.txt] [--jobs 64] [--per-host 8] [--limit N]
