@@ -20,8 +20,9 @@ A stream is
            the new links, which counted as playing). Its reason is "notice: " and the title, which the catalogue's
            report shows. A song of such a name fails a run at most: a day fails only when both runs fail, and a
            stream goes only after seven such days;
-           and also when its server's certificate is refused (expired, of another name, self-signed, a chain
-           that ends nowhere), checked by a handshake before ffmpeg plays it, as both apps check it (the owner's
+           and also when its server's certificate is refused (expired, of another name, self-signed; not one
+           whose chain lacks a link, see MISSING_LINK), checked by a handshake before ffmpeg plays it, as both
+           apps check it (the owner's
            decision of 2026-10-21, after Firebase Test Lab: Ubuntu's ffmpeg 6.1 does not check it, so about 240
            such stations counted as playing, while Android and libVLC refuse them all, e.g. an Infowars stream
            whose certificate expired on 30 May 2026). Its reason is "certificate: " and what was wrong. A
@@ -157,12 +158,17 @@ LEVELLED = re.compile(r"^(?:\[[^\]]*\] )?\[(\w+)\] ?(.*)$")
 
 
 TLS = ssl.create_default_context()
+# OpenSSL's "unable to get (local) issuer certificate", "unable to verify the first certificate": a server that leaves
+# out its chain's intermediate certificate. Windows finds it (its store keeps the ones it met) and libVLC plays the
+# stream there, so it is not counted (the first run of 2026-10-21 refused 193 such streams; 153 of them Windows took,
+# and six of seven played through libVLC). Android does not find it.
+MISSING_LINK = {2, 20, 21}
 
 
 def certificate_refused(address):
     """
-    Why an https server's certificate is refused, as both apps refuse it (expired, of another name, self-signed, a
-    chain that ends nowhere), or None. A handshake only, nothing is asked or read. Not ffmpeg's -tls_verify: an https
+    Why an https server's certificate is refused, as both apps refuse it (expired, of another name, self-signed), or
+    None. A handshake only, nothing is asked or read. Not ffmpeg's -tls_verify: an https
     address that sends the player on to http fails with it ("Option not found", radiojar, laut.fm).
     """
     parts = urllib.parse.urlsplit(address)
@@ -173,6 +179,8 @@ def certificate_refused(address):
             with TLS.wrap_socket(raw, server_hostname=parts.hostname):
                 return None
     except ssl.SSLCertVerificationError as error:
+        if error.verify_code in MISSING_LINK:
+            return None
         return f"certificate: {error.verify_message or error}"[:120]
     except (OSError, ValueError):
         return None  # no answer or another trouble: ffmpeg finds out and says why
