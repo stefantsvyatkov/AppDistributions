@@ -19,7 +19,13 @@ A stream is
            the owner's decision of 2026-10-08, after BadRock's old addresses played only a spoken notice to take
            the new links, which counted as playing). Its reason is "notice: " and the title, which the catalogue's
            report shows. A song of such a name fails a run at most: a day fails only when both runs fail, and a
-           stream goes only after seven such days.
+           stream goes only after seven such days;
+           and also when its server's certificate is refused (expired, of another name, self-signed, a chain
+           that ends nowhere), checked by a handshake before ffmpeg plays it, as both apps check it (the owner's
+           decision of 2026-10-21, after Firebase Test Lab: Ubuntu's ffmpeg 6.1 does not check it, so about 240
+           such stations counted as playing, while Android and libVLC refuse them all, e.g. an Infowars stream
+           whose certificate expired on 30 May 2026). Its reason is "certificate: " and what was wrong. A
+           station with another stream that plays keeps it.
 A day counts as failed only when every run of it failed (a stream that plays at either time is fine that day). A
 night on which more than 6% of the streams fail is the check's own trouble (its network, a broken ffmpeg),
 not the stations': its failures are not counted.
@@ -45,6 +51,8 @@ import json
 import os
 import random
 import re
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -148,6 +156,28 @@ NOTICE = re.compile(
 LEVELLED = re.compile(r"^(?:\[[^\]]*\] )?\[(\w+)\] ?(.*)$")
 
 
+TLS = ssl.create_default_context()
+
+
+def certificate_refused(address):
+    """
+    Why an https server's certificate is refused, as both apps refuse it (expired, of another name, self-signed, a
+    chain that ends nowhere), or None. A handshake only, nothing is asked or read. Not ffmpeg's -tls_verify: an https
+    address that sends the player on to http fails with it ("Option not found", radiojar, laut.fm).
+    """
+    parts = urllib.parse.urlsplit(address)
+    if parts.scheme.lower() != "https" or not parts.hostname:
+        return None
+    try:
+        with socket.create_connection((parts.hostname, parts.port or 443), timeout=10) as raw:
+            with TLS.wrap_socket(raw, server_hostname=parts.hostname):
+                return None
+    except ssl.SSLCertVerificationError as error:
+        return f"certificate: {error.verify_message or error}"[:120]
+    except (OSError, ValueError):
+        return None  # no answer or another trouble: ffmpeg finds out and says why
+
+
 def play(address, agent=PLAYER_AGENT):
     """ok, blocked or failed, and why."""
     target = address
@@ -156,6 +186,9 @@ def play(address, agent=PLAYER_AGENT):
             target = first_in_pls(address) or address
     except Exception as error:
         return "failed", f"playlist: {error}"[:120]
+    refused = certificate_refused(target)
+    if refused:
+        return "failed", refused
     command = ["ffmpeg", "-hide_banner", "-nostdin", "-loglevel", "level+info", "-rw_timeout", "10000000",
                "-user_agent", agent, "-i", target, "-t", "1", "-vn", "-f", "null", "-"]
     try:
@@ -171,7 +204,9 @@ def play(address, agent=PLAYER_AGENT):
         if titles and NOTICE.search(titles[0]):
             return "failed", f"notice: {titles[0]}"[:120]
         return "ok", ""
-    why = (errors[-1] if errors else f"ffmpeg exit code {result.returncode}").strip()
+    # A refused certificate is named as such: the last line only says "I/O error".
+    certificate = [text for text in errors if "certificate" in text.lower()]
+    why = (certificate[0] if certificate else errors[-1] if errors else f"ffmpeg exit code {result.returncode}").strip()
     if any(word in line for line in lines for word in REFUSED):
         return "blocked", why[:120]
     return "failed", why[:120]
