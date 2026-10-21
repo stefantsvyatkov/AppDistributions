@@ -161,7 +161,7 @@ TLS = ssl.create_default_context()
 # OpenSSL's "unable to get (local) issuer certificate", "unable to verify the first certificate": a server that leaves
 # out its chain's intermediate certificate. Windows finds it (its store keeps the ones it met) and libVLC plays the
 # stream there, so it is not counted (the first run of 2026-10-21 refused 193 such streams; 153 of them Windows took,
-# and six of seven played through libVLC). Android does not find it.
+# and six of seven played through libVLC). The Android app fetches it itself since 2026-10-21 (MissingIntermediates).
 MISSING_LINK = {2, 20, 21}
 
 
