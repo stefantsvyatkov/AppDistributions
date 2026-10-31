@@ -66,9 +66,12 @@ from concurrent.futures import ThreadPoolExecutor
 USER_AGENT = "BSTRadio-StreamCheck/1.0 (+https://github.com/stefantsvyatkov/AppDistributions)"
 PLAYER_AGENT = "VLC/3.0.20 LibVLC/3.0.20"
 BROWSER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-SERVERS = ["de1", "de2", "nl1", "at1", "fi1", "fr1"]
+SERVERS = ["de1", "de2", "all"]  # when the server list does not come (nl1, at1, fi1 and fr1 were gone by 2026-10-30)
 DEAD_DAYS = 7
 BAD_NIGHT = 0.06
+# When Radio Browser does not answer, it is asked again every 5 minutes for half an hour; then this run is skipped with
+# the exit code OFFLINE, and the workflow's e-mail says Radio Browser was offline (the owner's wish, 2026-10-31).
+OFFLINE_WAIT, RETRY_EVERY, OFFLINE = 30 * 60, 5 * 60, 3
 # On Windows (confirm_dead.py on the owner's computer) ffmpeg and curl must open no console window: one would take
 # the screen reader's focus.
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -83,7 +86,8 @@ def fetch(url, timeout):
 
 def radio_browser():
     """The stations the catalogue is made of: Radio Browser's list without the ones it marks broken, fetched in
-    pages of 5000 as the catalogue builder fetches it (the whole list at once is refused)."""
+    pages of 5000 as the catalogue builder fetches it (the whole list at once is refused). A page it does not give is
+    asked for again for half an hour before this run is skipped (OFFLINE)."""
     try:
         servers = sorted({server["name"] for server in json.loads(fetch("https://all.api.radio-browser.info/json/servers", 30))})
     except Exception as error:
@@ -93,7 +97,8 @@ def radio_browser():
 
     stations, offset, page = [], 0, 5000
     while True:
-        for attempt in range(6):
+        attempt, deadline = 0, None
+        while True:
             server = servers[attempt % len(servers)]
             url = f"https://{server}/json/stations/search?hidebroken=true&order=name&offset={offset}&limit={page}"
             try:
@@ -101,9 +106,14 @@ def radio_browser():
                 break
             except Exception as error:  # another server, or the same one a little later
                 print(f"{server} offset {offset}: {error}", file=sys.stderr)
-                time.sleep(5 * (attempt + 1))
-        else:
-            raise SystemExit("Radio Browser did not answer.")
+            deadline = deadline or time.monotonic() + OFFLINE_WAIT
+            left = deadline - time.monotonic()
+            if left <= 0:
+                print(f"Radio Browser did not answer for {OFFLINE_WAIT // 60} minutes.", file=sys.stderr)
+                print(f"Radio Browser was offline for {OFFLINE_WAIT // 60} minutes, so there is no check this time.")
+                sys.exit(OFFLINE)
+            attempt += 1
+            time.sleep(min(5 * attempt if attempt <= 6 else RETRY_EVERY, left))
         stations.extend(batch)
         if len(batch) < page:
             return stations

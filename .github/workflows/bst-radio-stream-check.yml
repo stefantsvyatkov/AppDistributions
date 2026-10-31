@@ -35,6 +35,8 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+    outputs:
+      offline: ${{ steps.play.outputs.offline }}
     env:
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
@@ -56,11 +58,19 @@ jobs:
           gh release download "$TAG" --repo "$REPO" --pattern extra-streams.txt --dir previous \
             || echo "::notice::No list of BST Radio's own stations yet."
 
+      # Exit code 3: Radio Browser did not answer for half an hour, so there is nothing to check this time (the job
+      # "Radio Browser was offline" below says so).
       - name: Play every stream
-        run: python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --extra-streams previous/extra-streams.txt --out stream-health.json.gz --report dead-streams.txt >> "$GITHUB_STEP_SUMMARY"
+        id: play
+        run: |
+          status=0
+          python3 bst-radio/check_streams.py --previous previous/stream-health.json.gz --extra-streams previous/extra-streams.txt --out stream-health.json.gz --report dead-streams.txt >> "$GITHUB_STEP_SUMMARY" || status=$?
+          if [ "$status" = 3 ]; then echo "offline=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          exit "$status"
 
       # The draft is made again only when it is gone: a draft's tag name is not unique, and a second one would split the files.
       - name: Publish the record
+        if: steps.play.outputs.offline != 'true'
         run: |
           if ! output=$(gh release view "$TAG" --repo "$REPO" 2>&1); then
             if [[ "$output" != *"not found"* ]]; then echo "::error::Reading $TAG failed: $output"; exit 1; fi
@@ -68,3 +78,16 @@ jobs:
               --notes "The working files of BST Radio's catalog build and nightly stream check. A draft: only the repository's owner and its workflows see it."
           fi
           gh release upload "$TAG" stream-health.json.gz dead-streams.txt --repo "$REPO" --clobber
+
+  # The owner's wish (2026-10-31): when Radio Browser is offline, the e-mail of the failed run says so. GitHub's e-mail
+  # names the jobs that failed, so this job fails under that name. Nothing is lost: the next check is 12 hours later.
+  offline:
+    name: Radio Browser was offline
+    needs: check
+    if: needs.check.outputs.offline == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Say so
+        run: |
+          echo "::error title=Radio Browser was offline::Radio Browser did not answer for 30 minutes, so the streams were not checked this time. The next check is 12 hours later."
+          exit 1
